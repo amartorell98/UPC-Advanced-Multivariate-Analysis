@@ -1,0 +1,394 @@
+---
+title: "Local linear regression and local Poisson regression"
+author: "Àlex Martorell i Locascio, Enric Reverter, Pim Schoolkate"
+date: "16/10/2022"
+output:
+  html_document:
+    df_print: paged
+editor_options:
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Part 1.1: Local Polynomial Regression
+
+```{r}
+library(sm)
+data(aircraft)
+attach(aircraft)
+lgPower <- log(Power)
+lgSpan <- log(Span)
+lgLength <- log(Length)
+lgWeight <- log(Weight)
+lgSpeed <- log(Speed)
+lgRange <- log(Range)
+```
+
+```{r}
+m <- data.frame(Yr, Period, lgPower, lgSpan, lgLength, lgWeight, lgSpeed, lgRange)
+x <- m[, "Yr"]
+y <- m[, "lgWeight"]
+```
+
+In this first part, we will fit a local polynomial regression to variables from the "aircraft" data set in the R package "sm". The aircraft data set describes different aircraft models and their building year. The variables that we are interested in are "Yr", which denotes the year of first manufacture of the airplane model, and the maximum take-off weight of the aircraft, which is transformed using a log-transformation. A graphical representation of the data is given below.
+
+```{r}
+plot(x,y, col="grey65", xlab="Year of first manufacture", ylab="Log maximum take-off weight (kg)", main="Year of manufacture vs the log maximum take-off weight.")
+```
+
+As it seems, the take-off weight during the 20s, 30s, and 40s was more limited to orders of $10^7-10^9$kg, whereas at the end of the 20th century, the aircraft technology had progressed thus far that aircrafts with take-off weight in the order of $10^{13}$kg were able to be build, while aircrafts with lower take-off weight were still being constructed.
+
+Thus, an expected fit would show an increase in take-off weight in the first half of the 20th century, and a stagnation in the second half.
+
+The local polynomial regression was taken from the course resources:
+
+```{r}
+locpolreg <- function(x,y,h=(max(x)-min(x))/5,q=1,r=0,tg=NULL,type.kernel="normal",
+                      nosubplot=FALSE,doing.plot=TRUE, ...){
+   # locpolreg.R Local polynomial regression for estimating the 
+   #             regression function or its r-th derivative
+   #            
+   # Input: 
+   #      x,y  Observed data (two (n,1) vectors)
+   #      h    Smoothing parameter 
+   #      q    degree of the local polynomial to be fitted (default: 1)
+   #      r    order of the derivative to be estimate (Default: 0, the function)
+   #      tg   grid of values t where the estimated regression function 
+   #           is evaluated (default: x)
+   #      type.kernel "normal"  (Gaussian, default), 
+   #                  "epan"    (Epanechnikov) or 
+   #                  "rs.epan" (re-scaled Epanechnikov)
+   #                  "unif"    (Uniform Kernel in [-1,1])  
+   #
+   # Output:  An object with two elements, 
+   #      mtg  Estimated values of the r-th derivative of the regression function at points in vector tg
+   #      S    The smoothing matrix
+   #
+   # Taken from: Pedro Delicado
+   if (is.null(tg)){tg<-x}                  
+   aux <- sort(tg,index.return=T)
+   sorted.tg <- tg[aux$ix]
+   sorted.tg.ix <- aux$ix
+
+   n <- length(x);
+   m <- length(tg);
+   mtgr <- numeric(m);
+   S <- matrix(0,nrow=m,ncol=n)
+
+   for (i in seq(1,m)){
+      aux <- kernel((x-tg[i])/h,type=type.kernel);
+      Ih <- (aux>0);
+      ni <- sum(Ih);     
+      xh <- x[Ih]-tg[i];
+      Dq <- matrix(1,nrow=ni,ncol=q+1);
+      if (q>0){for (j in 1:q) Dq[,j+1] <- xh^j}
+      Wx <- kernel(xh/h,type=type.kernel)/h;
+      Wm <- Wx%*%ones(1,q+1);
+      Dqq <- Wm*Dq;
+      Si <- solve(t(Dq)%*%Dqq)%*%t(Dqq);
+      beta <- Si%*%y[Ih];
+      mtgr[i] <- factorial(r)*beta[r+1];
+      S[i,Ih] <- Si[r+1,]
+   }
+  
+   if (doing.plot){
+      if (r==0){
+        if (nosubplot) par(mfrow=c(1,1))
+        plot(x,y,col="grey",...)
+        lines(sorted.tg,mtgr[sorted.tg.ix],col=1,lwd=2)
+      } 
+      else{
+         par(mfrow=c(2,1))
+         aux <- locpolreg(x,y,h,q,0,tg,nosubplot=F,type.kernel,...)
+         plot(sorted.tg,mtgr[sorted.tg.ix],type="n", 
+              xlab="x",ylab="Estimated derivative")
+         abline(h=0,col=4)
+         lines(sorted.tg,mtgr[sorted.tg.ix],col=1,lwd=2)
+      }
+   }
+return(list(mtgr=mtgr,S=S))
+}
+
+epan <- function(x){pmax(.75*(x+1)*(1-x))}
+kernel <- function(x,type=c("normal","epan","rs.epan","unif")){
+   switch(type[1],
+          epan = pmax(.75*(x+1)*(1-x),0),
+          rs.epan = pmax(.75*(x/sqrt(5)+1)*(1-x/sqrt(5))/sqrt(5),0),
+          unif = as.numeric( (abs(x)<=1) )/2,
+          dnorm(x))
+}
+ones <- function(n,m){matrix(1,nrow=n,ncol=m)}
+
+```
+
+In order to find the optimal bandwidth $h$, we use the leave on out cross validation Predictive Mean Squared Error (PMSE) defined as:
+
+$$ \text{PMSE}_{\text{Val}}(h) = \frac{1}{n_V}\sum^{n_V}_{i=1}(y^V_i - \hat{m}_h(x^V_i))^2$$
+
+where $n_V$ is the size of the $i$th validation set $(x^V_i, y^V_i)$ and $\hat{m}_h(x)$ is the estimator computed with bandwidth $h$ using the training set. The PMSE is also used to compare different values of $q$ and the normal kernel function.
+
+The leave one out cross validation PMSE is implemented as follows:
+```{r}
+loocv_reg = function(X,y,h,q=1,type.kernel="normal"){
+    pmse = 0
+    for (j in  1:length(X)){
+      aux <- locpolreg(X[-j],y[-j], h, q=q, tg=x[j], type.kernel = type.kernel, doing.plot= FALSE)
+      pmse <- pmse + (y[j]-aux$mtgr)^2
+      }
+    pmse <- pmse/length(X)
+    return (pmse)
+    }
+```
+
+For $q$, values of 0, 1, 2, and 3 are considered. From a theoretical perspective, it is well advised to use uneven values for $q$, as the quadratic formulae for even values only allow symmetric approximations at point $t$. However, because experimentation is always interesting, both $q=0$ and $q=2$ are experimented with too.
+
+Note that we also wanted to experiment with different kernel functions, but were limited by errors thrown by the solve function, without finding proper solutions.
+
+```{r}
+hs <- seq(1,15, by=1) # Why is it between 1 and 15 by 1?
+r.q0.normal <- sapply(hs, function(i) loocv_reg (x,y,i, q=0, type.kernel = "normal"))
+r.q1.normal <- sapply(hs, function(i) loocv_reg (x,y,i, q=1, type.kernel = "normal"))
+r.q2.normal <- sapply(hs, function(i) loocv_reg (x,y,i, q=2, type.kernel = "normal"))
+r.q3.normal <- sapply(hs, function(i) loocv_reg (x,y,i, q=3, type.kernel = "normal"))
+```
+
+The results of the bandwidth estimation $h$ can be seen in the plot below. For each value of $q$, the optimal bandwidth $h$ is denoted with a cross. Interestingly, for $q=3$ the best bandwidth is very large. One reason for this could be that for $q=3$, the local polynomial regression overfits the data for smaller values of $h$, whereas for larger values of $h$ the fit becomes less biased. 
+```{r}
+y.max <- max(r.q1.normal)
+y.min <- min(r.q1.normal)
+plot(hs,r.q1.normal,ylim=c(y.min,y.max),ylab="estimated MSPE",
+     main="Estimated MSPE by cv", lty=1, col="red")
+lines(hs,r.q1.normal, col="red")
+points(hs,r.q2.normal, col="blue")
+lines(hs,r.q2.normal, col="blue")
+points(hs,r.q3.normal, col="green")
+lines(hs,r.q3.normal, col="green")
+points(hs,r.q0.normal, col="black")
+lines(hs,r.q0.normal, col="black")
+points(which.min(r.q0.normal), min(r.q0.normal), pch=4, cex=2, lwd=2, col="black")
+points(which.min(r.q1.normal), min(r.q1.normal), pch=4, cex=2, lwd=2, col="red")
+points(which.min(r.q2.normal), min(r.q2.normal), pch=4, cex=2, lwd=2, col="blue")
+points(which.min(r.q3.normal), min(r.q3.normal), pch=4, cex=2, lwd=2, col="green")
+legend("topright", c("q = 0", "q = 1", "q = 2", "q = 3"), col=c("black", "red", "blue", "green"), lwd=c(1, 1,1,1))
+```
+
+For now, it seems that a bandwidth $h=4$ for $q=1$ is the best parameter choice for the local polynomial regression.
+
+```{r}
+fit <- locpolreg(x,y, h=4, q=1)
+```
+
+Next, we consider the residuals of the predicted values. As explained in the description of the data, a higher variance in is observed in the second half of the 20th century, and thus computing a confidence interval can be meaningful for the representation of the data.
+
+First, the residuals get transformed using:
+
+$$ Z = \log\epsilon^2$$
+
+```{r}
+eps_i <- y - fit$mtgr
+zi <- log(eps_i^2)
+```
+
+Next, we perform a leave one out cross validation with PMSE to another local polynomial regression, this time for the residuals.
+```{r}
+hs <- seq(1,15, by=1)
+e.q0.normal <- sapply(hs, function(i) loocv_reg (x,zi,i,q=0))
+e.q1.normal <- sapply(hs, function(i) loocv_reg (x,zi,i,q=1))
+e.q2.normal <- sapply(hs, function(i) loocv_reg (x,zi,i,q=2))
+e.q3.normal <- sapply(hs, function(i) loocv_reg (x,zi,i,q=3))
+y.max <- max(e.q1.normal)
+y.min <- min(e.q0.normal)
+
+plot(hs,e.q1.normal,ylim=c(y.min,y.max),ylab="estimated MSPE",
+     main="Estimated MSPE by cv", lty=1, col="red")
+lines(hs,e.q1.normal, col="red")
+points(hs,e.q2.normal, col="blue")
+lines(hs,e.q2.normal, col="blue")
+points(hs,e.q3.normal, col="green")
+lines(hs,e.q3.normal, col="green")
+points(hs,e.q0.normal, col="black")
+lines(hs,e.q0.normal, col="black")
+points(which.min(e.q0.normal), min(e.q0.normal), pch=4, cex=2, lwd=2, col="black")
+points(which.min(e.q1.normal), min(e.q1.normal), pch=4, cex=2, lwd=2, col="red")
+points(which.min(e.q2.normal), min(e.q2.normal), pch=4, cex=2, lwd=2, col="blue")
+points(which.min(e.q3.normal), min(e.q3.normal), pch=4, cex=2, lwd=2, col="green")
+legend("topright", c("q = 0", "q = 1", "q = 2", "q = 3"), col=c("black", "red", "blue", "green"), lwd=c(1, 1,1,1))
+
+
+```
+
+With the same procedure, this time it appears that $h=6$, with $q=0$ is the best fit to the data.
+
+```{r}
+fitcond <- locpolreg(x,zi, h=6, q=0, main="log(sigma^2(x)) vs xi")
+q <- fitcond$mtgr
+```
+
+Finally, we compute 
+
+$$\hat{\sigma^2}(x) = e^{\hat{q}(x)}$$
+where $\hat{q}(x)$ is non-parametric approximation of $Z$
+
+```{r}
+sigma2 <- exp(q)
+```
+
+Plotting $\epsilon_i^2$ and $\hat{\sigma^2}(x)$, shows how the variance in the error increases in the second half of the 20th century. The error in the first half stays fairly dense around 0.
+```{r}
+plot(x,eps_i^2, type="p", col="red")
+lines(x, sigma2, col="black", lwd=2)
+```
+
+Lastly, we are able to plot the regression fit, combined with the 95% confidence interval.
+
+```{r}
+lr.m <- fit$mtgr
+plot(x,y, col="grey65", xlab="Year of first manufacture", ylab="Log maximum take-off weight (kg)", main="Year of manufacture vs the log maximum take-off weight.
+     Fit: Local Polynomial Regression using q=1, h=4, kernel=normal")
+lines(x,lr.m, type="l", ylim=c(min(lr.m-1.96*sqrt(sigma2)),max(lr.m + 1.96*sqrt(sigma2))), lwd=2)
+lines(x,lr.m + 1.96*sqrt(sigma2), col="red", lwd=2, lty=2)
+lines(x,lr.m-1.96*sqrt(sigma2), col="red", lwd=2, lty=2)
+legend("topleft", c("Local Polynomial Regression", "95%-Confidence Interval"), col=c("black", "red"), lwd=c(2,2), lty=c(1,2))
+```
+
+
+## part 1.2: Non-parametric Regression
+
+We reproduce the same method using the "regression" function from the "sm" package, which uses a non-parametric regression to fit the data. Instead of performing leave one out cross validation this time, the "dpill" function from the "KernSmooth" package will be used to estimate the bandwidth $h$:
+
+```{r}
+library(KernSmooth)
+
+h = dpill(x, y)
+h
+```
+
+Next, we fit the data using the regression function and the optimally found $h$.
+```{r}
+sm.fit = sm.regression(x, y, h, eval.points=x)
+```
+
+We then again transform the estimated residuals.
+```{r}
+eps_i <- y - sm.fit$estimate
+zi <- log(eps_i^2)
+```
+
+We fit another nonparametric model using the same procedure as before.
+```{r}
+hs = dpill(x, zi)
+
+sm.fitcond <- sm.regression(x, zi, hs, eval.points=x)
+q <- sm.fitcond$estimate
+```
+
+Finally, we compute $\hat{\sigma^2}(x)$
+```{r}
+sigma2 <- exp(q)
+```
+
+We plot $\hat{\epsilon_i}^2$ and $\hat{\sigma^2}(x)$
+```{r}
+plot(x,eps_i^2, type="p", col="red")
+lines(x, sigma2, col="black", lwd=2)
+```
+
+Lastly, we are able to look at the results of the non-parametric fit, with a 95% confidence interval
+
+```{r}
+sm.m <- sm.fit$estimate
+plot(x,y, col="grey65", xlab="Year of first manufacture", ylab="Log maximum take-off weight (kg)", main="Year of manufacture vs the log maximum take-off weight.
+     Fit: Local Polynomial Regression using q=1, h=4, kernel=normal")
+lines(x,sm.m, type="l", ylim=c(min(sm.m-1.96*sqrt(sigma2)),max(sm.m + 1.96*sqrt(sigma2))), lwd=2)
+lines(x,sm.m + 1.96*sqrt(sigma2), col="red", lwd=2, lty=2)
+lines(x,sm.m-1.96*sqrt(sigma2), col="red", lwd=2, lty=2)
+legend("topleft", c("Local Polynomial Regression", "95%-Confidence Interval"), col=c("black", "red"), lwd=c(2,2), lty=c(1,2))
+```
+
+The plots from both regression models are combined to see their difference. The major difference seems to be that the non-parametric regression from "sm" is able to smooth out the estimation more towards the end of the data, where there is less data. However, this difference is quite unimportant, and it seems that both approaches in this case work just as well.
+
+```{r}
+plot(x,y, col="grey65")
+lines(x,lr.m, type="l", ylim=c(min(m-1.96*sqrt(sigma2)),max(m + 1.96*sqrt(sigma2))))
+lines(x,lr.m + 1.96*sqrt(sigma2), col="red")
+lines(x,lr.m-1.96*sqrt(sigma2), col="red")
+
+lines(x,sm.m, type="l", ylim=c(min(m-1.96*sqrt(sigma2)),max(m + 1.96*sqrt(sigma2))), lty=2)
+lines(x,sm.m + 1.96*sqrt(sigma2), col="red",  lty=2)
+lines(x,sm.m-1.96*sqrt(sigma2), col="red",lty=2)
+legend("topleft", c("Local Poly Regression", "Non-parametric regression"), lwd=c(1,1), lty=c(1, 2))
+```
+
+## Part 2: Local Poisson Regression
+
+The second part of this assignment aims to fit a Local Poisson Regression to the "countries" data set provided in the course resources. We are asked to consider the variables le.fm (which denotes the difference between the female and male life expectancy) and the life expectancy.
+```{r}
+countries<-read.csv2(file="HDI.2017.subset.csv",row.names = 1)
+attach(countries)
+le.fm.r <- round(le.fm)
+```
+
+Plotting the data, we get a good idea of what we are working with. Because of the shape of the data, a poisson distribution might be a right fit to the data. It seems that countries with a life expectancy between 70 and 80 sometimes have a large difference between the expected age of women vs that of men.
+
+```{r}
+plot(Life.expec, le.fm.r, xlab="Life expectancy", ylab="difference male and female life expectancy", main="Life expectancy vs difference male and female life expectancy")
+```
+
+```{r}
+# expected log-likelihood
+# poisson log-likelihood
+loglik.CV <- function(x,y,h){
+  n <- length(x)
+  
+  #estimation of lambda
+  
+  la <- sapply(1:n, 
+      function(i,x,y,h){
+         sm.poisson(x=x[-i],y=y[-i],h=h,eval.points=x[i],display="none")$estimate
+      },   x,y,h)
+  return(sum( exp(la)*(la^y/factorial(y)) )/n)
+}
+
+
+# This is a general function which computes 
+# method can be equal to 'loglik.CV' (default) or 'prob.missclas.CV'
+h.cv.sm.poisson <- function(x,y,rg.h=NULL,l.h=10,method=loglik.CV){
+   cv.h <- numeric(l.h)
+   if (is.null(rg.h)){
+      hh <- c(h.select(x,y,method="cv"),
+              h.select(x,y,method="aicc"))#,hcv(x,y))
+      rg.h <- range(hh)*c(1/1.1, 1.5)
+   }
+   i <- 0
+   gr.h <- exp( seq(log(rg.h[1]), log(rg.h[2]), l=l.h))
+   for (h in gr.h){
+      i <- i+1
+      cv.h[i] <- method(x,y,h)
+   }
+   return(list(h = gr.h, 
+               cv.h = cv.h, 
+               h.cv = gr.h[which.min(cv.h)]))
+}
+
+```
+
+Using a similar approach in 1.1 we perform a cross validation to find the best value for the bandwidth $h$, which in this case seems to be close to 9.
+   
+```{r}
+library(sm)
+h.CV.loglik <- h.cv.sm.poisson(Life.expec,le.fm.r,rg.h=c(6,14),method=loglik.CV)
+plot(h.CV.loglik$h,h.CV.loglik$cv.h)
+lines(h.CV.loglik$h,h.CV.loglik$cv.h)
+```
+
+Using the optimal $h$ we can now fit a local poission regression to the data. Plotting it, together with the data gives:
+
+```{r}
+aux <- sm.poisson(Life.expec,le.fm.r,h=h.CV.loglik$h.cv)
+title(main=paste("h.cv.loglik =",round(h.CV.loglik$h.cv,2),sep=""))
+```
+
+Not much can be said besides it seems to be properly fitting the data.
