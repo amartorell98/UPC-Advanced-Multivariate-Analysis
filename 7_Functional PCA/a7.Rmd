@@ -1,0 +1,241 @@
+---
+title: "FPCA & MDS"
+author: "Àlex Martorell, Enric Reverter, Pim Schoolkate"
+date: "21/11/2022"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Load Data and Dependencies
+```{r}
+library(fda)
+library(fda.usc)
+
+rm(list = ls())
+load("Bike_sharing_fdata.Rdata")
+day = read.csv("day.csv", sep=",")
+```
+
+# Part 1
+
+## a)
+
+The 2 first components capture more than 92% of the variability, 61.8% and 30.45% respectively. The 3rd one explains only 2.79%. For that, reducing the dimensions to 2 components would be reasonable.
+```{r}
+cnt = list.fdata$cnt
+
+cnt.pca.fdata = fdata2pc(cnt, ncomp=3)
+summary(cnt.pca.fdata)
+```
+
+
+
+## b) 
+
+PC1 and PC2 explain most of the variability. PC1 explains most of the variability in the rush hours between the hours 7 and 10 and between 17 and 19, while also accounting for a little of the variability during the between 10 and 17. PC2 seems to explain most of the variability between 10 and 17, while only contributing to the first rush hour.
+PC3 also contributes to the rush hours, however, from the Biplots above, it can be seen that its contribution is already covered by PC1 and PC2.
+
+```{r}
+par(mfrow=c(1,1))
+
+names(cnt.pca.fdata)
+
+# % of explained variance by each principal component
+round(cnt.pca.fdata$d^2/sum(cnt.pca.fdata$d^2)*100,2)
+# cumulated
+round(cumsum(cnt.pca.fdata$d^2)/sum(cnt.pca.fdata$d^2)*100,2)
+
+plot(cnt.pca.fdata$d^2/sum(cnt.pca.fdata$d^2)*100,type="b",
+     main="Percentage of variance explained")
+
+plot(cnt.pca.fdata$rotation[1], ylim=c(-0.4,0.6), col='red', lwd=2, main="Variation of the different FPC")
+plot(cnt.pca.fdata$rotation[2], col='blue', lwd=2, add=T)
+plot(cnt.pca.fdata$rotation[3], col='green', lwd=2, add=T)
+abline(h=0,col=8)
+legend("topleft", c("Variation FPC 1", "Variation FPC 2", "Variation FPC 3"),
+       col=c('red', "blue", "green"), lwd=2)
+
+cte <-100
+plot(cnt,col=8,main="Effect of the FPC 1")
+lines(func.mean(cnt),lwd=4)
+lines(func.mean(cnt)-cte*cnt.pca.fdata$rotation[1],lwd=4,col=4,lty=2)
+lines(func.mean(cnt)+cte*cnt.pca.fdata$rotation[1],lwd=4,col=2,lty=2)
+legend("topleft",c("mean - cte * FPC 1","mean","mean + cte * FPC 1"),
+       col=c(4,1,2),lty=c(2,1,2),lwd=4)
+
+cte <-100
+plot(cnt,col=8,main="Effect of the FPC 2")
+lines(func.mean(cnt),lwd=4)
+lines(func.mean(cnt)-cte*cnt.pca.fdata$rotation[2],lwd=4,col=4,lty=2)
+lines(func.mean(cnt)+cte*cnt.pca.fdata$rotation[2],lwd=4,col=2,lty=2)
+legend("topleft",c("mean - cte * FPC 2","mean","mean + cte * FPC 2"),
+       col=c(4,1,2),lty=c(2,1,2),lwd=4)
+
+cte <-100
+plot(cnt,col=8,main="Effect of the FPC 3")
+lines(func.mean(cnt),lwd=4)
+lines(func.mean(cnt)-cte*cnt.pca.fdata$rotation[3],lwd=4,col=4,lty=2)
+lines(func.mean(cnt)+cte*cnt.pca.fdata$rotation[3],lwd=4,col=2,lty=2)
+legend("topleft",c("mean - cte * FPC 3","mean","mean + cte * FPC 3"),
+       col=c(4,1,2),lty=c(2,1,2),lwd=4)
+```
+
+## c)
+
+From the scatter plots we learn the following about the 3 principal components:
+
+PC1 seems to explain the bike use during the different seasons, although this is better reflected in the contribution of the month variable to PC1. Furthermore, PC1 is influenced much by the temperature and the feeling temperature. Casual and registered bike users also play a major role, but this is to be expected as their sum should equal the count.
+
+PC2 explains mostly the effect of the days in the week on the bike usage. Likewise, whether a day is a working day or not also contributes to PC2. 
+
+PC3 also has some variability in the different month, but other than that, not many variables are contributing to it.
+
+```{r}
+library(ggplot2)
+library(ggpubr)
+library(grid)
+
+data = cbind(day, cnt.pca.fdata$coefs[,1:3])
+xaxis = names(day[,3:ncol(day)])
+pcs = colnames(cnt.pca.fdata$coefs[,1:3])
+
+for (pc in pcs) {
+  pc.plots = list()
+  i = 1
+  for (var in xaxis) {
+    p = ggplot(data, aes(x=!!sym(var), y=!!sym(pc))) + 
+      geom_point() +
+      rremove("ylab")
+    pc.plots[[i]] = p
+    i = i+1
+  } 
+  nam = paste(pc, ".plot", sep="")
+  pc.plot = ggarrange(plotlist=pc.plots, ncol=5, nrow=3)
+  pc.plot = annotate_figure(pc.plot, top = text_grob(as.character(pc), 
+               color = "black", face = "bold", size = 14))
+  assign(nam, pc.plot)
+}
+
+PC1.plot
+PC2.plot
+PC3.plot
+```
+
+# Part 2
+
+## a)
+
+```{r}
+par(mfrow=c(1,1))
+temp = list.fdata$temp
+temp.deriv = fdata.deriv(temp, 1)
+plot(temp.deriv)
+```
+
+## b) 
+
+```{r}
+temp.d = metric.lp(temp.deriv, lp=1)
+```
+
+## c)
+
+```{r}
+temp.mds = cmdscale(temp.d, k=3, eig=TRUE)
+min(temp.mds$eig)
+mds.scores = temp.mds$points[,1:3]
+```
+
+## d)
+
+```{r}
+plot(as.data.frame(mds.scores))
+
+# % of explained variance by each principal component
+round(temp.mds$eig/sum(temp.mds$eig)*100,2)
+# cumulated
+round(cumsum(temp.mds$eig)/sum(temp.mds$eig)*100,2)
+
+plot(temp.mds$eig/sum(temp.mds$eig)*100,type="b",
+     main="Percentage of variance explained")
+```
+
+
+It can be seen how D1 and D2 capture most of the variance. D1 has a greater variation around daytime, so approximately between 7 and 15. Then again during later hours, from 17 to 21. D2 accounts for most variability around the last hours of the day and the first ones, so approximately between 22 and 3. It also accounts for hours around 15. D3 does not seem to be significant in comparison to D1 and D2.
+
+```{r}
+cte <-100
+hours = seq(0, 23, 1)
+plot(temp.deriv,col=8,main="Effect of the FD1")
+lines(func.mean(temp.deriv),lwd=4)
+lines(y=temp.deriv$data[which.max(temp.mds$points[,1]),], x=hours, lwd=4, col=2)
+lines(y=temp.deriv$data[which(median(temp.mds$points[,1]) == temp.mds$points[,1]),], x=hours, lwd=4, col=4)
+lines(y=temp.deriv$data[which.min(temp.mds$points[,1]),], x=hours, lwd=4, col=6)
+legend("bottomleft",c("mean","max","median","min"),
+       col=c(1,2,4,6),lwd=4)
+
+plot(temp.deriv,col=8,main="Effect of the FD2")
+lines(func.mean(temp.deriv),lwd=4)
+lines(y=temp.deriv$data[which.max(temp.mds$points[,2]),], x=hours, lwd=4, col=2)
+lines(y=temp.deriv$data[which(median(temp.mds$points[,2]) == temp.mds$points[,2]),], x=hours, lwd=4, col=4)
+lines(y=temp.deriv$data[which.min(temp.mds$points[,2]),], x=hours, lwd=4, col=6)
+legend("bottomleft",c("mean","max","median","min"),
+       col=c(1,2,4,6),lwd=4)
+
+plot(temp.deriv,col=8,main="Effect of the FD3")
+lines(func.mean(temp.deriv),lwd=4)
+lines(y=temp.deriv$data[which.max(temp.mds$points[,3]),], x=hours, lwd=4, col=2)
+lines(y=temp.deriv$data[which(median(temp.mds$points[,3]) == temp.mds$points[,3]),], x=hours, lwd=4, col=4)
+lines(y=temp.deriv$data[which.min(temp.mds$points[,3]),], x=hours, lwd=4, col=6)
+legend("bottomleft",c("mean","max","median","min"),
+       col=c(1,2,4,6),lwd=4)
+```
+
+
+## e)
+
+D1 seems to slightly capture the bike usage across the months. The same can be said regarding weather situation, where bike usage decreases as it worsens. Then, it seems to be influenced by temperature. Humidity also gives the impression to influence it. Again, casual and registered user, which sum up to cnt, can be explained by D1.
+
+D2 exhibits a higher correlation with season and month, as its values increase altogether. Weekday hints a higher correlation in comparison to D1. Not much can be said regarding other variables.
+
+D3 does not exhibit any kind of significant correlation. 
+
+```{r}
+library(ggplot2)
+library(ggpubr)
+library(grid)
+
+colnames(mds.scores) = c("D1", "D2", "D3")
+data = cbind(day, mds.scores)
+xaxis = names(day[,3:ncol(day)])
+dims = colnames(mds.scores)
+
+for (dim in dims) {
+  dim.plots = list()
+  i = 1
+  for (var in xaxis) {
+    p = ggplot(data, aes(x=!!sym(var), y=!!sym(dim))) + 
+      geom_point() +
+      rremove("ylab")
+    dim.plots[[i]] = p
+    i = i+1
+  } 
+  nam = paste(dim, ".plot", sep="")
+  dim.plot = ggarrange(plotlist=dim.plots, ncol=5, nrow=3)
+  dim.plot = annotate_figure(dim.plot, top = text_grob(as.character(dim), 
+               color = "black", face = "bold", size = 14))
+  assign(nam, dim.plot)
+}
+
+D1.plot
+D2.plot
+D3.plot
+```
+
+
+

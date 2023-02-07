@@ -1,0 +1,237 @@
+---
+title: "AMA - A1"
+author: "Enric Reverter, Pim Schoolkate, Alex Martorell"
+date: "9/21/2022"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Assignment 1
+
+```{r}
+par(mfrow=c(1,1))
+load("BikeDay.Rdata")
+head(day)
+```
+
+```{r}
+X = scale(day[day$yr==1,c(10,14)])
+pairs(X)
+```
+
+1. Maximum log-likelihood cross-validation:
+```{r}
+library(sm)
+plot(X,as=1,col=8)
+sm.density(X,h=.5*c(1,1),display="slice",
+  props=c(25,50,75,95),col=2,add=TRUE)
+```
+
+```{r}
+new.point <- matrix(c(0,0),ncol=2)
+f.hat <- sm.density(X,h=.5*c(1,1),display="none",eval.grid=FALSE,
+                    eval.points=new.point)
+log(f.hat$estimate)
+
+va <- seq(0.1,1,by=0.1)
+na <- length(va)
+logLCVa <- numeric(na)
+
+n <- dim(X)[1]
+
+for (j in 1:na){
+  a <- va[j]
+  for (i in 1:n){
+    new.point <- matrix(X[i,],ncol=2)
+    f.hat.i <- sm.density(X[-i,],h=a*c(1,1),display="none",eval.grid=FALSE,
+                    eval.points=new.point)$estimate # So, what is density exactly in this situation? Why is it a number?
+    logLCVa[j] <- logLCVa[j] + log(f.hat.i)
+  }
+}
+
+plot(va,logLCVa,type="b")
+```
+
+```{r}
+a.opt <- va[which.max(logLCVa)]
+
+plot(X,asp=1,col=8,main=paste("Optimal a: ",a.opt))
+sm.density(X,h=a.opt*c(1,1),display="slice",props=c(25,50,75,95),col=2,add=TRUE)
+```
+
+## Question 2
+
+```{r}
+library(mclust)
+k=2:6
+GMM_BIC <- Mclust(X,G=k)
+summary(GMM_BIC,parameters=TRUE)
+
+clust.ind <- GMM_BIC$classification
+```
+Reference: *mclust 5: Clustering, Classification and Density Estimation Using Gaussian Finite Mixture Models*, Luca Scrucca, Michael Fop, T. Brendan Murphy, and Adrian E. Raftery.
+
+Observe that the model chosen by Mclust method (estimating the parameters by ML and choosing based on BIC) is a VVE mixture with 3 components.
+This means we have the following solution:
+$$f(x) = \sum_{k=1}^{G=3}\alpha_k \phi(x;\mu_k, \Sigma_k) $$
+where $\phi(x;\mu_k, \Sigma_k)$ are Multivariate normals.In multivariate normals, clusters are ellipsoidal. A decomposition of the covariance matrix $\Sigma_k = \lambda_k D_k A_k D_k^T$ where $\lambda_k$ is a scalar helps us to control the shape of the density. The one dimensional case is simple: distributions have equal variance or varying variance. Note that the BIC plot below shows up to 14 different configurations. This is because variable configuration is defined by Volume, Shape and Orientation. 
+
+Mclust returns a VVE mixture: this means that the distributions are ellipsoidal, their volume and shape are variable but their orientation are equal. The classification plot below shows that very clearly.
+
+
+### BIC Plot
+```{r}
+plot(GMM_BIC, what="BIC", asp=1)
+```
+
+### Classification Plot
+```{r}
+plot(GMM_BIC, what="classification",asp=1)
+```
+
+```{r}
+plot(GMM_BIC, what="density",asp=1)
+points(X)
+```
+
+```{r}
+plot(X,col=clust.ind,asp=1)
+```
+
+3. Can components be merged in the previous GMM?
+```{r}
+library(fpc)
+
+gmm_bic = mclustBIC(X, G=2:6)
+gmm_summ = summary(gmm_bic, X, G=2:6)
+
+mergenorm = mergenormals(X, mclustsummary=gmm_summ, method="bhat")
+clust.ind = mergenorm$clustering
+```
+
+Observe that we now have 2 clusters shown in the plot below. (Down from 3 in Question 2). \texttt{mergenormals} merges Gaussian Mixtures in a hierarchical fashion. This means that it computes a **merging criterion** between pairs of clusters. The two clusters with highest criterion value are merged and then this value is recomputed for the new cluster. There has to be a cutoff value which stops the merging process. Note that there are many merging criterions, but in this case we have chosen "bhat". This stands for **Bhattacharyya distance**, which measures the similarity of the probability distributions. It is out of the scope of this project to go into depth in the intricacies of this metric, but by definition, the **Bhattacharyya distance** is defined as:
+  
+  $$ D_B(P,Q) = -\log(BC(P,Q))$$
+where $BC$ is:
+    
+$$BC(P,Q) = \int \sqrt{p(x)q(x)}$$ 
+and $p(x)$ and $q(x)$ are the probability density functions.
+    
+In R, the bhat method is actually computing the Bhattacharyya matrix, a matrix with the the distances between pairs of gaussians. 
+    
+
+```{r}
+plot(X, col=mergenorm$clustering, asp=1)
+```
+
+4. As point 1 and 2 are already satisfied in the above sections, the result for this exercise is a plot which shows the three clusters, with their 75 percentile border. Since the merge normals has found 2 clusters, this is considered $k^*$
+```{r}
+library(sm)
+plot(X,col=clust.ind,asp=1)
+for (j in 1:2){
+  cl.j <- (clust.ind==j)
+  sm.density(X[cl.j,],h=a.opt*c(1,1), 
+             display="slice",props=c(75),
+             col=j, cex=4, add=TRUE)
+}
+```
+
+# DBSCAN
+
+DBSCAN considers two main parameters that influence the clusters that it outputs. First of all, $\epsilon$ refers to the maximum distance between to points to consider them being part of the same cluster. That means that two points belong to the same cluster if: 
+
+$$ d(x_i; x_j)\leq \epsilon$$
+Where $d$ refers to the distance between $x_i$ and $x_j$ in $\mathbb{R}^p$. Thus the neighborhood of point $x_i$ is defined as:
+
+$$ N_{\epsilon}(x_i) = \left\{ x_j \in \mathcal{D} : d(x_i; x_j)\leq \epsilon\right\}$$
+
+The minimum number of points parameter refers to the minimum amount of points that are needed in the neighborhood $N_{\epsilon}(x_i)$ of a point $x_i$ to consider it as a "core point". So if for example, the minimum number of points is 5 and $\epsilon = 0.2$, a point $x_i$ is considered a core point if there is at least 5 points $x_j, \ j \in \left\{1,...,5\right\}$ where $d(x_i;x_j) \leq 0.2$
+
+Clusters are determined by considering core points in the neighborhood of other core points. If both $x_i$ and $x_j$ are core points and in each other neighborhood, then all point in the neighborhoods $N_{\epsilon}(x_i)$ and $N_{\epsilon}(x_i)$, are part of the same cluster. Points that are in the cluster, but do not satisfy $\#N_{\epsilon}>\text{minPTS}$ are considered as border points. 
+
+Lastly, points that are not found to be part of a cluster are considered to be outliers. 
+
+Therefore, setting $\epsilon$ to large value and the minimum amount of points to a low value will result in DBSCAN finding all points being part of one big cluster, and all points being core points. Whereas setting $\epsilon=0$, no point is part of a cluster and thus each point will be an outlier. Some other interactions between $\epsilon$ and the minimum amount of points will be discussed with graphical examples next.
+
+For this lab, it was suggested to play around with $\epsilon \in \left\{0.25, 0.5\right\}$ and $\text{minPTS}\in \left\{10, 15, 20\right\}$. However, some other values will be considered to understand the behavior of DBSCAN.
+
+
+The following function is to make the document more readable, and simply performs a DBSCAN and plots the result, and will return the output of the DBSCAN if ret=TRUE.
+
+```{r}
+DBSCAN <- function(epsilon, minPts, ret=FALSE, plotDB=TRUE) {
+  fpc.ds <- fpc::dbscan(X,eps = epsilon, MinPts = minPts, showplot = 0)
+  if (plotDB==TRUE) {plot(fpc.ds,X, main=paste("fpc::dbscan; epsilon=",epsilon,",minPts=",minPts),
+     xlab="x",ylab="y",xlim=c(-4,4),ylim=c(-2,3.2))}
+  if (ret==TRUE) {return(fpc.ds$cluster)}
+}
+```
+
+For $\epsilon=0.25$ and $\text{minPTS} = 10$, one large shallow cluster is found, which seems to be loosely connected around the coordinates $(x=-0.2, y=-1)$ by 2 core points. 
+
+```{r}
+DBSCAN(0.25, 10)
+```
+
+Setting $\epsilon=0.23$ already results in the large cluster to be split, thus indicating that the combination of $\epsilon=0.25$ and $\text{minPTS} = 10$ is not optimal.
+
+```{r}
+DBSCAN(0.23, 10)
+```
+
+Likewise, setting $\text{minPTS} = 11$ also results in the large cluster to be split, strengthening the hypothesis above.
+
+```{r}
+DBSCAN(0.25, 11)
+```
+
+For $\epsilon=0.25$ and $\text{minPTS} = 15$, three clusters and many points as outliers are found. Expanding on the argument made above, the previously large shallow cluster is now split in 3 clusters which combined are smaller than the large one, due to the higher number of required minimum points. However, a higher value for $\epsilon$ seems to make sense, it is yet difficult to say if the minimum amount of points should be 15.
+
+```{r}
+DBSCAN(0.25, 15)
+```
+
+For consistency purposes, $\epsilon=0.25$ and $\text{minPTS} = 20$ was also performed, but as expected yields a similar but worse result as the graph above.
+
+```{r}
+DBSCAN(0.25, 20)
+```
+
+The DBSCANs for $\epsilon=0.5$ all generate similar results. In each scan, one large cluster can be observed on the bottom of the graph. However, for minimum points $=20$ the cluster on the top of the graph vanishes, as in this region, the points are not dense enough to satisfy the conditions of the minimum points. Therefore, this combination is discarded.
+
+```{r}
+DBSCAN(0.50, 20)
+```
+
+Next, a decision has to be made between $\text{minPTS}=10$ or $\text{minPTS}=15$. As there is no metric for determining whether a DBSCAN is more likely than another, this has to be done visually. The main difference between the two is the increase of points detected as outliers as the minimum points increase to 15, which can be seen in the plots below. Subjectively, one could argue that the extra outliers are helping to distinct between the two clusters, however, some points that could very well belong to the top cluster are now seen as outliers (around coordinates $(x=-0.1, y=1.3)$). 
+Therefore, it remains somewhat unclear to what is considered a good model for this data.
+
+```{r}
+DBSCAN(0.50, 10)
+```
+
+```{r}
+DBSCAN(0.50, 15)
+```
+
+Using cross-tables, it might be possible to infer what parameters for DBSCAN are best, comparing it to the mergenormals (we are thus assuming that the mergenormals model is a better model).
+
+When looking at the cross-table between the mergenormals and DBSCAN with parameter $\text{minPTS}=10$, it can be seen that there are 3 points that are clustered differently in the two models.
+
+```{r}
+table(mergenorm$clustering, DBSCAN(0.5, 10, TRUE, FALSE))
+```
+
+With $\text{minPTS}=15$, the differently clustered points is reduced to 1, however, at the expense of finding more outliers that would otherwise mostly belong to cluster 2.
+
+```{r}
+table(mergenorm$clustering, DBSCAN(0.5, 15, TRUE, FALSE))
+```
+
+# 6.
+Question 6 is answered in all other questions by thoroughly considering what the algorithms and the distributions are doing.

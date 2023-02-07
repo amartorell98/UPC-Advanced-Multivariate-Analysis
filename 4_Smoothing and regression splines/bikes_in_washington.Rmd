@@ -1,0 +1,129 @@
+---
+title: "Smoothing and regression splines: Bikes in Washington"
+author: "Àlex Martorell, Enric Reverter, Pim Schoolkate"
+date: "11/9/2022"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r cars}
+rm(list = ls())
+load("bikes.Washington.Rdata")
+``` 
+
+```{r}
+head(bikes)
+```
+
+## Question 1
+
+```{r}
+sm.spline = smooth.spline(x=bikes$instant, y=bikes$cnt, cv=FALSE)
+```
+
+### a) Which is the value of the chosen penalty parameter $\lambda$
+
+```{r}
+sm.spline$lambda
+```
+
+
+### b) Which is the corresponding equivalent number of degrees of freedom df?
+
+```{r}
+sm.spline$df
+```
+
+### c) How many knots have been used
+
+```{r}
+sm.spline$fit$nk
+```
+
+### d) Give a graphic with the scatter plot and the estimated regression function $\hat{m}$(instant)
+
+```{r}
+plot(x=bikes$instant, y=bikes$cnt)
+lines(sm.spline$x, sm.spline$y)
+```
+
+
+## Question 2
+
+### a) Use the function logistic.IRWLS.splines to fit the non-parametric binary regression cnt.5000 as a function of the temperature, using df=6.
+
+```{r}
+source("IRWLS_logistic_regression.R")
+require(dplyr)
+
+bikes = bikes %>%
+  mutate(cnt.5000 = case_when(cnt >= 5000 ~ 1,
+                              TRUE ~ 0))
+sm.spline.binary = logistic.IRWLS.splines(x=bikes$temp, y=bikes$cnt.5000, df=6)
+temp.5000 = bikes$temp[which(sm.spline.binary$predicted.values > 0.5)]
+```
+
+### a.2) In which range of temperatures is Pr(cnt>=5000|temp) larger than 0,5?
+
+```{r}
+min(temp.5000)
+max(temp.5000)
+```
+
+### b) Choose the parameter df by k-fold log-likelihood cross validation with $k=5$ using df.v = 3:15 as the set of possible values for df.
+
+```{r}
+kfold_cv_llk = function(x, y, nfolds, df_vals) {
+  
+  index = sample(seq_len(nfolds), length(x), replace = TRUE)
+  stopifnot(length(x) == length(y))
+
+  llk = numeric(length(df_vals))
+  llk_folds = numeric(nfolds)
+  i = 1
+  
+  for (dfi in df_vals) {
+    for (n in seq_len(nfolds)) {
+      x_training = x[which(index != n)]
+      x_testing = x[which(index == n)]
+      y_training = y[which(index != n)]
+      y_testing = y[which(index == n)]
+  
+      sm.spline.bin = logistic.IRWLS.splines(x=x_training, y=y_training, x.new=x_testing, df=dfi)
+      llk_folds[[n]] = log_likelihood(y_testing, sm.spline.bin$predicted.values)
+    }
+  llk[[i]] = mean(llk_folds)
+  i = i + 1
+  }
+  return(llk)
+}
+
+log_likelihood = function(real, prob) {
+  llk = 0
+  for (i in 1:length(real)) {
+    llk = llk + real[i]*log(prob[i]) + (1-real[i]*log(1-prob[i]))
+  }
+  return(llk)
+}
+
+llk = kfold_cv_llk(x=bikes$temp, y=bikes$cnt.5000, nfolds=5, df_vals=3:15)
+```
+
+```{r}
+plot(3:15, llk)
+lines(3:15, llk)
+points(x=which.max(llk)+2, y=max(llk), col="red", cex=2, pch=19)
+abline(v=which.max(llk)+2, col="red")
+text(x=which.max(llk)+3, y=max(llk), labels=format(max(llk), digits=4), col="red")
+```
+
+```{r}
+sorted_bikes = bikes %>% arrange(temp)
+sm.spline.binary.best = logistic.IRWLS.splines(x=sorted_bikes$temp, y=sorted_bikes$cnt.5000, df=9, plts=TRUE)
+```
+

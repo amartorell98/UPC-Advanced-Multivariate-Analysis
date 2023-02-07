@@ -1,0 +1,222 @@
+---
+title: "Assignment 5"
+author: "Àlex Martorell, Enric Reverter, Pim Schoolkate"
+date: "20/11/2022"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+We load the data from the Hirsutism data set.
+```{r}
+df<-read.table("hirsutism.dat", header=T, sep="\t",fill=TRUE)
+```
+
+Remove outliers, FGm12 less than 0 (coding mistake) 
+```{r}
+i <- which(df$FGm12 < 0)
+df <- df[-i,]
+```
+
+Are there any NA's?
+```{r}
+apply(is.na(df), 2, sum)
+df <- na.omit(df)
+```
+We choose to delete these 8 rows which contain NA's in the variables SysPres, DiaPres, 
+weight and height.
+
+
+
+We now perform some basic exploratory analysis to capture the characteristics of our data set. 
+```{r}
+plot(df[, -c(3:4)])
+```
+It is clear that most variable relationships with FGm12 have a strong nonlinear component. 
+
+We can also check the distribution of the different variables.
+```{r}
+old.par<-par(mfrow=c(2,3))
+for (j in 2:7) hist(df[,j],main=names(df)[j])
+```
+
+
+```{r}
+apply(df[,-c(1,3,4)],2,sd)
+apply(df[, -c(1,3,4)], 2, function(x){diff(range(x))})
+```
+This is to see if we can classify groups of variables. Although not very precise, 
+we can establish three groups based on the variability of the covariate:
+* FGm0, FGm12
+* SysPres, DiaPres, weight
+* height
+
+This may be necessary if we want to consider tensor product splines, as they are used among variables of different groups. 
+
+Finally, the treatment variable (takes 4 different values) is transformed into a factor, as it is required by the statement.
+```{r}
+df$Treatment_f <- as.factor(df$Treatment)
+```
+
+Let us begin with the actual problem. We first try a linear model with all variables 
+```{r}
+library(mgcv)
+set.seed(100) 
+ml <- gam(FGm12 ~ FGm0 + SysPres + DiaPres + weight + height + Treatment_f, data=df)
+summary(ml)
+```
+Clearly, the deviance explained is very low. It was already pointed out that for better fitting, a Generalized Additive model with splines would be required. 
+
+```{r}
+m0<-gam(FGm12 ~ s(FGm0) + s(SysPres) + s(DiaPres) + s(weight) + s(height) + Treatment_f, data=df)
+summary(m0)
+```
+We quickly test the semiparametric model m01 by virtue of the results of the
+full model m0 (interpretations explained below)
+```{r}
+m01<-gam(FGm12 ~ s(FGm0) + SysPres + s(DiaPres) + weight + height + Treatment_f, data=df)
+summary(m01)
+```
+
+
+The total Deviance explained is 38.1% (a metric similar to R^2 but which can also be used for variables with a non-gaussian response). The residual plots show the individual effect
+of each variable in the response variable. Here it is already clear that some 
+variables have a non linear relation with FGm0, but this can also be assessed from 
+a theoretical point of view.
+
+Variables weight and height have Equivalent degrees of freedom equal to 1, meaning that a smoothing term is not necessary. Also, DiaPres, weight and height have high p-values, which means they should be removed from the model. 
+
+Finally, model m01 (semiparametric) is almost the same as m0, because the smooth fit was linear.
+
+
+We keep two more significant variables in terms of p-value. We try to model FGm12 with using no smoothing spline for SysPres, with results in model m1. Since the removal of variables may affect the need for a smoothing term in SysPres, we also test that.
+
+```{r}
+m1 <- gam(FGm12 ~ s(FGm0) + SysPres + Treatment_f, data=df)
+summary(m1)
+
+m11 <- gam(FGm12 ~ s(FGm0) + s(SysPres) + Treatment_f, data=df)
+summary(m11)
+```
+From the point of view of Deviance explained, in both models 
+Observe that the fit still returns a very high p-value. Removing 
+The smoothing term on SysPres has no positive influence on predicting the 
+response variable FGm12. (p-values 0.275 and 0.33) This can be further verified via the anova test, where
+we fail to reject the null hypothesis (i.e. The second/ newer model "is correct")
+```{r}
+anova(m0, m1, test="F")
+anova(m0, m11, test="F")
+```
+Also, the deviance explained is significantly lower: 32.8% and 34.6% respectively.
+
+It can be interesting to consider a tensor product between variables of different groups. Recall that this is done when variables belong to two different groups / have different units . In class, for example, this has been done in an example with variables Latitude and Longitude. We try pairs of covariates that are measured in different units. 
+
+We also check the two kinds of tensor products we know: te() and ti(). te() produces a tensor
+product smooth and ti() produces a tensor product interaction. In other words, ti() does not check the main effects, and te() does. First we start with te()
+
+```{r}
+mte <- gam(FGm12 ~ s(FGm0) + te(SysPres, height) + Treatment_f, data=df)
+
+mte1 <- gam(FGm12 ~ s(FGm0) + te(weight, height) + Treatment_f, data=df)
+
+mte2 <- gam(FGm12 ~ s(FGm0) + te(DiaPres, height) + Treatment_f, data=df)
+
+mte3 <- gam(FGm12 ~ s(FGm0) + te(SysPres, weight) + Treatment_f, data=df)
+
+mte4 <- gam(FGm12 ~ s(FGm0) + te(DiaPres, weight) + Treatment_f, data=df)
+```
+
+We test all of the new models with the original model, which give unimpressive results.
+```{r}
+anova(m0, mte, test="F")
+anova(m0, mte1, test="F")
+anova(m0, mte2, test="F")
+anova(m0, mte3, test="F")
+anova(m0, mte4, test="F")
+```
+
+
+We see that all these combinations do not return good results in terms of Deviance explained. Nonetheless, the Wald statistical test returns a high p-value (it is not possible 
+to reject the null hypothesis that states that the smoothing term is zero.).
+However, if we consider the summation of smoothing of 2 tensor products (we try different pairs) we get a substantial improvement
+
+```{r}
+m3 <- gam(FGm12 ~ s(FGm0) + te(DiaPres,weight) + te(SysPres,height) + Treatment_f, data=df)
+summary(m3)
+anova(m11, m3, test="F")
+```
+
+The next step is to check interactions between the factor and the numerical variable. In
+GAM, this is done via the "by" parameter in s(). The idea is that the smooth interacts with the factor "Treatment_f". A different smooth is generated for each factor level
+thus being able to capture the inherent differences. We try it with the best models
+from the previous sections.
+
+```{r}
+m2 <- gam(FGm12 ~ s(FGm0, by=Treatment_f) + Treatment_f, data=df)
+summary(m2)
+
+m31 <- gam(FGm12 ~ s(FGm0, by=Treatment_f) + te(DiaPres,weight)  +te(SysPres,height) + Treatment_f , data=df)
+summary(m31)
+```
+
+```{r}
+anova(m0,m2, test="F")
+anova(m0,m31, test="F")
+```
+
+However, looking at the results of anova(), m2 is not a significant improvement from m0. The p-value for the F-test is smaller than in other cases. Although, if we value simplicity and scalability, m2 is better than m0. However, m31 gives an outstanding result, setting the explained deviance at 71.5%. The anova test rejects the null 
+hypothesis meaning that m31 is clearly a better model than the initial one. This will be our final model.
+
+Observe that there are many other possible combinations that have not been studied, such as a smoothing interaction between variables. 
+This can either be done linearly (i.e. weight * height) or defining a tensor product
+via ti().
+For example, we can consider
+```{r}
+m4 <- gam(FGm12 ~ s(FGm0, by=Treatment_f) + ti(DiaPres,weight) + ti(SysPres,height) + Treatment_f, data=df)
+summary(m4)
+```
+Model m31 is still the best. (Deviance of m4 = 59.3%)
+
+For our chosen final model, we take a look at its characteristics via the summary, plot, vis.gam and gam.check.
+gam.check makes sure  that the basis dimension choice works for this model. Low p-values indicate that k may be too low. This the case only for te(SysPres, height), however, since it is only the threshold value and edf is far from k, no action is needed.
+```{r}
+par(mfrow=c(2,2))
+gam.check(m31)
+```
+The residual plots show the majority residuals around zero, and some what of a straight line can be spotted in the response vs fitted plot. 
+
+The plot below shows some of the bivariate relationships between Fgm0 and pairs of variables. Note that for instance, in the last plot, we plot the pair (height, weight). Observe that the manifold is practically a plane, that is why considering a tensor product smooth is useless.
+
+
+```{r}
+vis.gam(m0,view=c("FGm0","SysPres"),
+        theta = 40, phi = 25, r = sqrt(3), d = 1,)
+vis.gam(m0,view=c("DiaPres","weight"),
+        theta = 40, phi = 25, r = sqrt(3), d = 1,)
+vis.gam(m0,view=c("SysPres","height"),
+        theta = 150, phi = 25, r = sqrt(3), d = 1,)
+vis.gam(m0,view=c("height","weight"),
+        theta = 0, phi = 0, r = sqrt(3), d = 1,)
+```
+
+Finally, these plots show the non linear response in the combination (FGm0, Treatment level) as well as the difference in the response when a tensor product spline is used.
+```{r}
+plot(m31, residuals = TRUE, shade=TRUE, seWithMean=TRUE, pages = 1, lwd=2)
+par(mfrow=c(1,1))
+plot(m31, select = 5, residuals = TRUE, se=FALSE, lwd=2)
+```
+
+## Conclusions
+
+
+After fitting all the models, we can safely say that smoothing techniques in GAM improve the initial results one can obtained using just a GLM.
+For the hirsutism data set, the initial observation is that three out of the 5 numerical
+variables have a linear effect over the response variable. 
+If interactions or tensor products are not considred, the explained deviance seems to remain quite low (close to 40%). This is because there is underlying information in the non linear space generated by two (or more) variables. In other words: The response can be explained better when considering a basis for the tensor product of the two aformentioned variables.
+Also, it has produced good results when considering smoothed interactions between the factor and the FGm0 variable. Finally, a tensor product interaction (ti()) gives good results but it is clear the main effects are important because te() returns the best score. 
+

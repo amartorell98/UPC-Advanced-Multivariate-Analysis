@@ -1,0 +1,422 @@
+---
+title: "FDA"
+author: "Àlex Martorell, Enric Reverter, Pim Schoolkate"
+date: "21/11/2022"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+day <- read.csv("day.csv", sep=",")
+hour <- read.csv("hour.csv", sep=",")
+```
+
+# Exercise 1
+
+We want to create the matrix X. We can do it in two different ways, explained below.
+
+```{r}
+r<-length(unique(hour$dteday))
+c<-length(unique(hour$hr))
+
+X <- data.frame(matrix(nrow=r, ncol=c))
+cn <- as.array(unique(hour$hr))
+rn <- as.array(unique(hour$dteday))
+colnames(X) <- cn
+rownames(X) <- rn
+
+for (i in 1:nrow(hour)){
+  d = hour[i, "dteday"]
+  h = hour[i, "hr"]
+  count = hour[i, "cnt"]
+  
+  X[rn==d, cn ==h] <- count
+  
+}
+```
+
+```{r, results='hide'}
+library(dplyr)
+library(tidyr)
+data = hour %>% 
+  group_by(dteday, hr) %>%
+  summarise(count = sum(cnt)) %>%
+  pivot_wider(names_from = hr, values_from = count, values_fill = 0) %>%
+  as.data.frame()
+```
+
+
+## b)
+We remove NA's by imputation of zero. This is a good idea if we know for a fact that no bikes were rented at a specific hour, which is what we will assume.
+This is not a good idea, however, if we believe that bikes were rented and that this data is missing. Then it would be more reasonable, for instance, to consider the mean between t-1 and t+1 (in case). If more than just one value was missing, we would have to consider more refined imputation techniques.
+```{r}
+X_na <- which(is.na(X), arr.ind=TRUE)
+for (i in 1:nrow(X_na)){
+    X[X_na[i,1], X_na[i,2]]<-0
+}
+```
+
+```{r}
+X<-data.matrix(X)
+```
+
+## c) 
+Transformed into a fd object. We choose a reasonable basis dimension, without giving to much importance to this theoretical aspect.
+
+```{r, include=FALSE}
+library(fda)
+library(fda.usc)
+```
+
+```{r}
+nbasis <- 15
+daybasis <- create.fourier.basis(rangeval=c(0, 23), nbasis=nbasis)
+cnt.fd <- Data2fd(y=t(X), argvals=0:23, daybasis)
+```
+
+## d) 
+Transform into a fdata object.
+```{r}
+hours <- 0:23
+cnt.fdata <- fdata(mdata=X, argvals= hours)
+```
+
+## e) 
+Fit glm with poisson response. We then estimate $\lambda_i(t)$ by the parameter type="response". Note that the type="link" returns the logarithm of the count.
+```{r}
+library(mgcv)
+
+hour.24 <- 0:23
+lambda <- data.frame(matrix(nrow=r, ncol=c))
+
+for (i in 1:nrow(X)){
+  df.bikes.i <- data.frame(hour.24=hour.24, day = X[i,])
+  gam.bikes.i <- gam(day~s(hour.24), data = df.bikes.i, family=poisson())
+  gam.bikes.re <- predict(gam.bikes.i, data.frame(hour.24=hour.24),type="response")
+  #gam.bikes.link <- predict(gam.bikes.i,data.frame(hour.24=hour.24),type="link")
+  
+  lambda[i, ] <- gam.bikes.re
+}
+
+# Convert all values lower than 1 to 1? SO then log(x) = 0 at minimum
+#lambda = lambda %>%
+#  mutate_all(~case_when(. < 1 ~ 1,
+#                       TRUE ~ .))
+  
+# convert it to fdata object
+#lambda <- lambda + 1
+lambda.fdata <- fdata(mdata=lambda, argvals=hours) # Lambda transposed ?
+```
+
+
+The plot of the estimated lambda evidently resembles the plot of cnt.fd
+```{r}
+plot(lambda.fdata)
+```
+
+
+## f)
+Same procedure but with the log transformation applied to the estimated functions:
+```{r}
+log.lambda <- log(lambda)
+log.lambda.fdata <- fdata(mdata=log.lambda, argvals=hours) # Should it be transposed? This is not right for some unknown reason. The log is not properly applied. 
+# I believe no-transposed is what works.
+```
+
+We also plot the logarithm of lambdas
+```{r}
+plot(log.lambda.fdata, ylim=c(-10,10))
+```
+
+We can see how there are some outliers. These are the predicted counts very close to zero, which causes a large negative logarithm. 
+
+# Exercise 2
+
+## a)
+Mean function for cnt.fd
+```{r}
+cnt.fd.mean <- mean.fd(cnt.fd)
+
+plot(cnt.fd,main=paste("Daily bike rental  (nbasis=",nbasis,")",sep=""))
+lines(cnt.fd.mean,col="red",lwd=4)
+legend("topleft","mean function",lty=1,col="red",lwd=4)
+```
+
+Since we want to compare working and non-working days, we create fd objects for these specific subsets.
+```{r}
+wd <- day[day$workingday==1,]
+wd <- wd[, "dteday"]
+nwd <- day[day$workingday==0,]
+nwd <- nwd[, "dteday"]
+```
+
+```{r}
+cnt.fd.wd <- Data2fd(y=t(X[wd,]), argvals=0:23, daybasis)
+cnt.fd.nwd <- Data2fd(y=t(X[nwd,]), argvals=0:23, daybasis)
+cnt.fd.wd.mean <- mean.fd(cnt.fd.wd)
+cnt.fd.nwd.mean <- mean.fd(cnt.fd.nwd)
+```
+
+
+```{r}
+plot(cnt.fd,main=paste("Daily bike rental  (nbasis=",nbasis,")",sep=""))
+lines(cnt.fd.mean,col="red",lwd=4)
+lines(cnt.fd.wd.mean, col="blue", lwd=4)
+lines(cnt.fd.nwd.mean, col="yellow", lwd=4)
+legend("topleft",c("Average","Avg. Working Days", "Avg. Non working days"),col=c("red","blue", "yellow"),lwd=4)
+
+```
+It is evident that the mean function for the average working days behaves similar to the mean of working days (there are more working days than holidays in a year). Also, the mean function for the holidays has the peak during in the afternoon (12h-15h), when the bikes are used for leisure. On the contrary, the peaks for bicycle renting are reached during commuting times (7h-9h, 17h-18h).
+
+
+
+We now implement the same procedure for the standard deviation.
+```{r}
+cnt.fd.sd <- sd.fd(cnt.fd)
+plot(cnt.fd.sd,col="red",
+     main=paste("St.Dev. of average bike rental (nbasis=",nbasis,")",sep=""))
+```
+
+Let us check what happens if differentiate between working days and non working days
+```{r}
+cnt.fd.sd.wd <- sd.fd(cnt.fd.wd) 
+cnt.fd.sd.nwd <- sd.fd(cnt.fd.nwd)
+plot(cnt.fd.sd,col="red",
+     main=paste("St.Dev. of the count of rented bicycles hourly (nbasis=",nbasis,")",sep=""), lwd=3)
+lines(cnt.fd.sd.wd, col="aquamarine1", lwd=3)
+lines(cnt.fd.sd.nwd, col="deepskyblue", lwd=3)
+legend("topleft",c("av.","work. days", "non-work. days "),col=c("red","aquamarine", "deepskyblue"),lwd=3, cex = 0.75)
+```
+
+
+## b)  
+The objective here is to study the correlation matrix between the count of rented bicycles for the hour variable. With this we can assess how correlated are hours within bike renting (helps to predict the behavior of the next hour in terms of the count of rentals).
+```{r}
+hours <- 0:23
+cnt.fd.cor <- cor.fd(hours, cnt.fd)
+
+op <- par(mfrow=c(1,2), pty="s")
+contour(hours, hours, cnt.fd.cor, 
+        xlab="Hour (0h-23h)",
+        ylab="Hour (0h-23h)",
+        main=paste("Correlation function across hours\n",
+                   "for number of bicycles rented in DC"),
+        cex.main=0.8, axes=FALSE)
+axisIntervals(1, atTick1=seq(0, 24, length=4), atTick2=NA, 
+              atLabels=seq(1/8, 1, 1/4)*24,
+              labels= paste(c(0,8,15,23), "H"))
+axisIntervals(2, atTick1=seq(0, 24, length=4), atTick2=NA, 
+              atLabels=seq(1/8, 1, 1/4)*24,
+            labels= paste(c(0,8,15,23), "H"))
+
+persp(hours, hours,cnt.fd.cor,
+      xlab="Hours", ylab="Hours", zlab="Correlation",
+      phi = 30, theta = -30)
+mtext("Hour Correlation", line=-4, outer=TRUE)
+par(op)
+```
+
+```{r}
+# Contour plot with colors
+filled.contour(hours, hours, cnt.fd.cor, xlab="Hours", ylab="Hours", color.palette = heat.colors, main="All days")
+```
+
+We repeat the correlation for working days and non working days.
+```{r}
+cnt.fd.cor.wd <- cor.fd(hours, cnt.fd.wd)
+cnt.fd.cor.nwd <- cor.fd(hours, cnt.fd.nwd)
+
+par(mfrow=c(1,2))
+# Contour plot with colors
+filled.contour(hours, hours, cnt.fd.cor.wd, xlab="Hours", ylab="Hours", color.palette = heat.colors, main="working days")
+filled.contour(hours, hours, cnt.fd.cor.nwd, xlab="Hours", ylab="Hours", color.palette = heat.colors, main="weekends")
+```
+
+## c) 
+Repeat the same for log.lambda.fdata as an fd object
+```{r}
+# For some reason this plot does not look right to me. UPDATE: It looks decent after setting minimum  (t) to 1 since then the log will be 0 at minimum. Otherwise the scale is uhm... weird. Try to change it where lambda = lambda %>% and you will see !
+log.lambda.fd = fdata2fd(log.lambda.fdata, nbasis=nbasis)
+log.lambda.fd.mean <- mean.fd(log.lambda.fd)
+
+par(mfrow=c(1,1))
+plot(log.lambda.fd,main=paste("Average bike rental  (nbasis=",nbasis,")",sep=""), ylim=c(-1,10))
+lines(log.lambda.fd.mean,col="red",lwd=4)
+legend("topleft","Mean",lty=1,col="red",lwd=4, cex=0.75)
+```
+
+```{r}
+wd_id = which(rownames(X) %in% wd)
+nwd_id = which(rownames(X) %in% nwd)
+log.lambda.fd.wd <- fdata2fd(log.lambda.fdata[wd_id,], nbasis=nbasis) # Needs t()?
+log.lambda.fd.nwd <- fdata2fd(log.lambda.fdata[nwd_id,], nbasis=nbasis) # Need t()?
+log.lambda.fd.wd.mean <- mean.fd(log.lambda.fd.wd)
+log.lambda.fd.nwd.mean <- mean.fd(log.lambda.fd.nwd)
+```
+
+Plots for mean:
+```{r}
+plot(log.lambda.fd,main=paste("Average of the logarithm of the estimated  bike rental  (nbasis=",nbasis,")",sep=""), ylim=c(-1,10))
+lines(log.lambda.fd.mean,col="red",lwd=4)
+lines(log.lambda.fd.wd.mean, col="blue", lwd=4)
+lines(log.lambda.fd.nwd.mean, col="yellow", lwd=4)
+legend("topleft",c("Average","Avg. Working Days", "Avg. Non working days"),col=c("red","blue", "yellow"),lwd=4, cex=0.5)
+```
+
+Plots for standard deviation:
+```{r}
+log.lambda.fd.sd <- sd.fd(log.lambda.fd)
+log.lambda.fd.sd.wd <- sd.fd(log.lambda.fd.wd) 
+log.lambda.fd.sd.nwd <- sd.fd(log.lambda.fd.nwd)
+plot(log.lambda.fd.sd,col="red",
+     main=paste("St.Dev. of the log count of rented bicycles per hour (nbasis=",nbasis,")",sep=""), ylim=c(0,10), lwd=3)
+lines(log.lambda.fd.sd.wd, col="aquamarine1", lwd=3)
+lines(log.lambda.fd.sd.nwd, col="deepskyblue", lwd=3)
+legend("topleft",c("av.","work. days", "non-work. days "),col=c("red","aquamarine1", "deepskyblue"),lwd=3, cex = 0.5)
+```
+
+
+```{r}
+hours <- 0:23
+log.lambda.fd.cor <- cor.fd(hours, log.lambda.fd)
+
+op <- par(mfrow=c(1,2), pty="s")
+contour(hours, hours, log.lambda.fd.cor, 
+        xlab="Hour (0h-23h)",
+        ylab="Hour (0h-23h)",
+        main=paste("LOG LOG Correlation function across hours\n",
+                   "for number of bicycles rented in DC"),
+        cex.main=0.8, axes=FALSE)
+axisIntervals(1, atTick1=seq(0, 24, length=4), atTick2=NA, 
+              atLabels=seq(1/8, 1, 1/4)*24,
+              labels= paste(c(0,8,15,23), "H"))
+axisIntervals(2, atTick1=seq(0, 24, length=4), atTick2=NA, 
+              atLabels=seq(1/8, 1, 1/4)*24,
+            labels= paste(c(0,8,15,23), "H"))
+
+persp(hours, hours,log.lambda.fd.cor,
+      xlab="Hours", ylab="Hours", zlab="Correlation",
+      phi = 30, theta = -30)
+mtext("Hour Correlation", line=-4, outer=TRUE)
+par(op)
+```
+
+```{r}
+# Contour plot with colors
+filled.contour(hours, hours, log.lambda.fd.cor, xlab="Hours", ylab="Hours", color.palette = heat.colors, mean="All days")
+```
+
+We repeat the correlation for working days and non working days.
+```{r}
+log.lambda.fd.wd.cor <- cor.fd(hours, log.lambda.fd.wd)
+log.lambda.fd.nwd.cor <- cor.fd(hours, log.lambda.fd.nwd)
+
+par(mfrow=c(1,2))
+# Contour plot with colors
+filled.contour(hours, hours, log.lambda.fd.wd.cor, xlab="Hours", ylab="Hours", color.palette = heat.colors, main="Working days")
+filled.contour(hours, hours, log.lambda.fd.nwd.cor, xlab="Hours", ylab="Hours", color.palette = heat.colors, main="Weekends")
+```
+
+# Exercise 3. 
+## a) 
+In this first section, the results obtained are pretty much identical to the ones seen before.
+```{r}
+## 1. Mean function
+cnt.fdata.mean = func.mean(cnt.fdata)
+lambda.fdata.mean = func.mean(lambda.fdata)
+log.lambda.fdata.mean = func.mean(log.lambda.fdata)
+
+par(mfrow=c(1,3))
+plot(cnt.fdata.mean, col="red",lwd=1, main="mean for count")
+plot(lambda.fdata.mean, col="blue",lwd=1, main ="mean for lambda") 
+plot(log.lambda.fdata.mean, col="black",lwd=1, main="mean for log lambda")
+```
+
+```{r}
+# By wd
+cnt.fdata.wd.mean = func.mean(cnt.fdata[wd_id,])
+lambda.fdata.wd.mean = func.mean(lambda.fdata[wd_id,])
+log.lambda.fdata.wd.mean = func.mean(log.lambda.fdata[wd_id,])
+
+cnt.fdata.nwd.mean = func.mean(cnt.fdata[nwd_id,])
+lambda.fdata.nwd.mean = func.mean(lambda.fdata[nwd_id,])
+log.lambda.fdata.nwd.mean = func.mean(log.lambda.fdata[nwd_id,])
+
+par(mfrow=c(1,3))
+plot(cnt.fdata.wd.mean, col="red",lwd=1, main=paste("mean for count \n work. / non-work days"))
+lines(cnt.fdata.nwd.mean, col="red",lwd=1, lty=2)
+legend("topleft",c("Work", "Non-work"), lty=c(1,2), col="red", cex=0.7)
+plot(lambda.fdata.wd.mean, col="blue",lwd=1, main=paste("mean for lambda \n work. / non-work days"))
+lines(lambda.fdata.nwd.mean, col="blue",lwd=1, lty=2)
+legend("topleft",c("Work", "Non-work"), lty=c(1,2), col="blue", cex=0.7)
+plot(log.lambda.fdata.wd.mean, col="black",lwd=1, main=paste("mean for log-lambda \n work. / non-work days"))
+lines(log.lambda.fdata.nwd.mean, col="black",lwd=1, lty=2)
+legend("topleft",c("Work", "Non-work"), lty=c(1,2), col="black", cex=0.7)
+
+```
+
+## b) 
+
+```{r}
+cnt.fdata.med = func.med.FM(cnt.fdata)
+lambda.fdata.med = func.med.FM(lambda.fdata)
+log.lambda.fdata.med = func.med.FM(log.lambda.fdata)
+
+cnt.fdata.trim = func.trim.FM(cnt.fdata)
+lambda.fdata.trim = func.trim.FM(lambda.fdata)
+log.lambda.fdata.trim = func.trim.FM(log.lambda.fdata)
+
+par(mfrow=c(1,3))
+plot(cnt.fdata.mean, col="red",lwd=1, main=paste("Count: \n mean, median, trimmed mean"))
+lines(cnt.fdata.med, col="red",lwd=1, lty=2)
+lines(cnt.fdata.trim, col="red",lwd=1, lty=4)
+legend("topleft",c("Mean", "Median", "Trimmed mean"), lty=c(1,2, 4), col="red", cex=0.7)
+
+plot(lambda.fdata.mean, col="blue",lwd=1, main=paste("Lambda: \n mean, median, trimmed mean"))
+lines(lambda.fdata.med, col="blue",lwd=1, lty=2)
+lines(lambda.fdata.trim, col="blue",lwd=1, lty=4)
+legend("topleft",c("Mean", "Median", "Trimmed mean"), lty=c(1,2, 4), col="blue", cex=0.7)
+
+plot(log.lambda.fdata.mean, col="black",lwd=1, main=paste("Log-lambda: \n mean, median, trimmed mean"))
+lines(log.lambda.fdata.med, col="black",lwd=1, lty=2)
+lines(log.lambda.fdata.trim, col="black",lwd=1, lty=4)
+legend("topleft",c("Mean", "Median", "Trimmed mean"), lty=c(1,2, 4), col="black", cex=0.7)
+```
+
+## c)
+Here, we check for outliers via the least-deep criteria in the three functional data sets we have: cnt, lambda, and log.lambda. Observe that 
+the red line is the mean function, and the light blue. The black funcitons are the instances deemed as outliers. These are considered to be the least according to the FM (Fraiman-Muñiz) depth measure. It is clear that the outliers in the data set are either functions with count 0 for several $t=0\div 23$ or with low counts in peak hours. We cans see that these tend to be very cold days or with bad weather, or holidays (December 25th, etc). 
+```{r}
+nb=20 # The number of bootstrap samples. (Time consuming if nb is large!)
+cnt.fdata.out<-outliers.depth.trim(cnt.fdata,dfunc=depth.FM,nb=nb)
+cnt.fdata.out$outliers
+
+lambda.fdata.out<-outliers.depth.trim(lambda.fdata,dfunc=depth.FM,nb=nb)
+rownames(X[as.integer(lambda.fdata.out$outliers),])
+
+log.lambda.fdata.out<-outliers.depth.trim(log.lambda.fdata,dfunc=depth.FM,nb=nb)
+rownames(X[as.integer(log.lambda.fdata.out$outliers),])
+
+par(mfrow=c(1,1))
+plot(cnt.fdata,col="grey")
+lines(c(cnt.fdata.med,cnt.fdata.trim),lwd=2, col="aquamarine")
+lines(cnt.fdata.mean,col="red",lwd=4)
+lines(cnt.fdata[cnt.fdata.out$outliers],col=1,lwd=2)
+
+par(mfrow=c(1,1))
+plot(lambda.fdata,col="grey")
+lines(c(lambda.fdata.med,lambda.fdata.trim),lwd=2, col="aquamarine")
+lines(lambda.fdata.mean,col="red",lwd=4)
+lines(lambda.fdata[as.integer(lambda.fdata.out$outliers),],col=1,lwd=2)
+
+par(mfrow=c(1,1))
+plot(log.lambda.fdata,col="grey")
+lines(c(log.lambda.fdata.med,log.lambda.fdata.trim),lwd=2, col="aquamarine")
+lines(log.lambda.fdata.mean,col="red",lwd=4)
+lines(log.lambda.fdata[as.integer(log.lambda.fdata.out$outliers),],col=1,lwd=2)
+```
